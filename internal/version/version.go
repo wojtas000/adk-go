@@ -14,5 +14,25 @@
 
 package version
 
-// Version exposes the current ADK Go version, used for llm request tagging
-const Version = "2.0.0"
+import (
+	"runtime/debug"
+	"strings"
+)
+
+const modulePath = "google.golang.org/adk/v2"
+const devVersion = "2.x-dev"
+
+var Version = resolveVersion()
+
+func resolveVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return devVersion
+	}
+	for _, dep := range info.Deps {
+		if dep.Path == modulePath && dep.Version != "" {
+			return strings.TrimPrefix(dep.Version, "v")
+		}
+	}
+	return devVersion
+}
