@@ -1,0 +1,44 @@
+# Verifies internal/version/version.go was bumped to match the release tag.
+#
+# The release event fires after the tag already exists, so a failure here cannot
+# un-publish the release; it turns the release run red as a loud, notified signal
+# that the constant is wrong. The bump is meant to land before tagging, via the
+# "Prepare release" workflow. This is the guard that catches a tag cut without
+# it, or one pointed at the wrong commit.
+name: Version check
+
+on:
+  release:
+    types: [published]
+
+  # Lets a maintainer verify an existing tag on demand, and keeps the guard
+  # exercisable without cutting a release.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to verify (e.g. v2.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve the tag
+        id: tag
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: echo "tag=${INPUT_TAG:-$EVENT_TAG}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Verify the version constant matches the tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: .github/scripts/check-version.sh "$TAG"

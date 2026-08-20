@@ -1,0 +1,138 @@
+# Cuts a core module release: bumps the version constant, commits it straight to
+# main (no PR), and opens a DRAFT GitHub Release for a human to review and
+# publish.
+#
+# Why a draft: the tag is not created until the draft is published, so nothing is
+# public until a person clicks Publish. Because the constant is bumped and
+# committed first, and the draft is pinned to that exact commit, the tag can only
+# ever land on a commit whose version already matches — the ordering problem that
+# makes a post-hoc check unable to block a release simply does not arise here.
+#
+# The push to main uses the built-in GITHUB_TOKEN. If main is protected, add
+# github-actions[bot] to that ruleset's bypass list; otherwise the push is
+# rejected. No PR and no environment approval gate are involved.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Core module version, without the leading v (e.g. 2.1.0)'
+        required: true
+        type: string
+
+# Read-only by default; the one job that needs to write is granted it locally so
+# the token stays least-privilege for everything else.
+permissions:
+  contents: read
+
+# Two releases cutting at once would race on the push to main. Serialise them.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # Fail fast, before the expensive matrix, if this was dispatched from anything
+  # other than main. The release job pushes to the ref it ran on, so cutting
+  # from a stray branch would bump and tag the wrong place.
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the run to be on main
+        run: |
+          if [ "$GITHUB_REF_NAME" != "main" ]; then
+            echo "::error::Releases must be cut from main (got '${GITHUB_REF_NAME}')."
+            exit 1
+          fi
+
+  # Run the same build/test/lint/tidy matrix a PR would, across every module.
+  # release depends on it, so a red check stops the release before anything is
+  # committed or pushed — the gate a PR normally provides, recovered for a flow
+  # that bypasses PRs.
+  checks:
+    needs: guard
+    uses: ./.github/workflows/go.yml
+
+  release:
+    needs: [guard, checks]
+    runs-on: ubuntu-latest
+    # Access control: configure this environment (Settings -> Environments ->
+    # release) with "Required reviewers" set to whoever may cut releases (e.g.
+    # the team lead). The run then pauses here until one of them approves.
+    # Until reviewers are configured the environment is inert, so set them up
+    # for the restriction to take effect.
+    environment: release
+    permissions:
+      contents: write  # push the bump commit to main and create the draft release
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Bump the version constant
+        env:
+          VERSION: ${{ inputs.version }}
+        # version.sh validates the format and rejects anything that is not
+        # X.Y.Z[-pre]; the job fails here on a bad input before anything is
+        # committed.
+        run: .github/scripts/version.sh set "$VERSION"
+
+      - name: Commit the bump to main
+        id: commit
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet; then
+            # The constant already matches: nothing to commit, release the
+            # current HEAD as-is.
+            echo "internal/version/version.go already at ${VERSION}; not committing."
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git add internal/version/version.go
+
+          # Least privilege in practice: the token can write the whole repo, so
+          # the workflow proves it only touched the one file. Anything else in
+          # the staged set is a bug or tampering, and the release stops here.
+          staged="$(git diff --cached --name-only)"
+          if [ "$staged" != "internal/version/version.go" ]; then
+            echo "release bump staged unexpected files:" >&2
+            echo "$staged" >&2
+            exit 1
+          fi
+
+          git commit -m "chore: release v${VERSION}"
+          # Push from a possibly-detached HEAD onto main.
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          SHA: ${{ steps.commit.outputs.sha }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; leaving it untouched." >&2
+            exit 1
+          fi
+
+          # --draft: the tag is not created until a human publishes.
+          # --target <sha>: pin the tag to the exact bump commit, so a later
+          #   push to main cannot move where the tag lands.
+          # --generate-notes: fill notes from merged PRs since the last release.
+          gh release create "$TAG" \
+            --draft \
+            --target "$SHA" \
+            --title "$TAG" \
+            --generate-notes
+
+          echo "Draft release $TAG created at ${SHA}. Review and publish it in the Releases UI."
+          echo "On publish, the tag is created and the Version check workflow verifies it."

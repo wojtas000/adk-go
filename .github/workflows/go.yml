@@ -14,6 +14,11 @@ on:
 
   workflow_dispatch:
 
+  # Lets other workflows (e.g. release.yml) run this exact build/test/lint/tidy
+  # matrix as a gate. Releasing pushes straight to main without a PR, so this is
+  # how the release gets the same checks a PR would.
+  workflow_call:
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true

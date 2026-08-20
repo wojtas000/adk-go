@@ -69,6 +69,26 @@ git switch -c my-fix origin/v1
 - **Version Coupling**: Each submodule's `go.mod` will specify the minimum version of `google.golang.org/adk/v2` it depends on. Submodules can be released independently of the core module and each other.
 - **go.work Impact**: `go.work` is for local development only and does not affect how modules are versioned, tagged, or fetched by consumers.
 
+**Cutting a core release**:
+
+The core version lives in `internal/version/version.go` as `const Version`, and
+must match the release tag. Two workflows keep it in sync so the bump is never
+forgotten:
+
+1. Run **Actions → Release** (`release.yml`) with the target version (e.g.
+   `2.1.0`). It bumps the constant, commits it directly to `main`, and opens a
+   **draft** GitHub Release pinned to that commit. The direct push needs
+   `github-actions[bot]` on the `main` ruleset's bypass list if `main` is
+   protected. Only maintainers listed as **required reviewers** on the `release`
+   environment can approve the run, and it must be dispatched from `main`.
+2. Review the draft release notes in the Releases UI and click **Publish**. Only
+   then is the tag `vX.Y.Z` created — on the pinned bump commit.
+3. On publish, **Version check** (`version-check.yml`) verifies the constant at
+   the tagged commit equals the tag and fails the release run if it does not.
+
+Locally, `.github/scripts/version.sh get` and `... set X.Y.Z` read and write the
+constant; the checks skip submodule tags (`plugin/.../vX.Y.Z`).
+
 ## Before you begin
 
 ### Sign our Contributor License Agreement
