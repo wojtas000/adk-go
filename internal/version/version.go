@@ -29,10 +29,24 @@ func resolveVersion() string {
 	if !ok {
 		return devVersion
 	}
+	return versionFrom(info)
+}
+
+// versionFrom reads the ADK Go version out of build info, without the leading
+// "v", or returns devVersion when the build recorded none.
+func versionFrom(info *debug.BuildInfo) string {
+	// Imported as a library: the consuming build records our version here.
 	for _, dep := range info.Deps {
 		if dep.Path == modulePath && dep.Version != "" {
 			return strings.TrimPrefix(dep.Version, "v")
 		}
+	}
+	// Built as the main module, so we are not one of our own dependencies. This
+	// covers `go install google.golang.org/adk/v2/cmd/adkgo@vX.Y.Z`, which
+	// reports the released version, and a local build of this repo, which
+	// reports a pseudo-version. Go writes "(devel)" when it recorded none.
+	if info.Main.Path == modulePath && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return strings.TrimPrefix(info.Main.Version, "v")
 	}
 	return devVersion
 }
